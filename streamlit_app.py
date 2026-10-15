@@ -3,54 +3,68 @@ import streamlit as st
 from snowflake.snowpark.context import get_active_session
 from snowflake.snowpark.functions import col
 
-# Connect to Snowflake
+# Connect to the active Snowflake session
 session = get_active_session()
 
-# App title
-st.title("MY PARENTS NEW HEALTHY DINNER")
-st.write("Choose your favorite fruits for a healthy dinner smoothie!")
+# Page configuration
+st.set_page_config(
+    page_title="Customize Your Smoothie",
+    page_icon="🥤",
+    layout="centered"
+)
+
+# App heading
+st.title("🥤 Customize Your Smoothie! 🥤")
+st.write("Choose the fruits you want in your custom Smoothie!")
 
 # Customer name
-name_on_order = st.text_input("Name on order:")
+name_on_order = st.text_input("Name on Smoothie:")
 
-st.write("The name on your order will be:", name_on_order)
+st.write("The name on your Smoothie will be:", name_on_order)
 
-# Read fruit options from Snowflake
-my_dataframe = session.table(
-    "SMOOTHIES.PUBLIC.FRUIT_OPTIONS"
-).select(col("FRUIT_NAME"))
+# Load fruit options from Snowflake
+fruit_df = (
+    session.table("SMOOTHIES.PUBLIC.FRUIT_OPTIONS")
+    .select(col("FRUIT_NAME"))
+)
 
-st.dataframe(my_dataframe, use_container_width=True)
-
-# Get fruit names for the multiselect
-fruit_rows = my_dataframe.collect()
+# Convert Snowflake results to a Python list
+fruit_rows = fruit_df.collect()
 fruit_options = [row["FRUIT_NAME"] for row in fruit_rows]
 
+# Fruit selection
 ingredients_list = st.multiselect(
     "Choose up to 5 ingredients:",
     options=fruit_options,
-    max_selections=5
+    max_selections=5,
+    placeholder="Choose an option"
 )
 
 # Submit order
-if st.button("Submit Order"):
+if st.button("Submit Order", type="primary"):
     if not name_on_order.strip():
         st.warning("Please enter your name.")
     elif not ingredients_list:
-        st.warning("Please select at least one ingredient.")
+        st.warning("Please choose at least one fruit.")
     else:
         ingredients_string = " ".join(ingredients_list)
 
-        # Insert order into Snowflake
-        my_insert_stmt = """
-            INSERT INTO SMOOTHIES.PUBLIC.ORDERS
-                (INGREDIENTS, NAME)
-            VALUES (?, ?)
-        """
+        try:
+            # Insert the selected ingredients into the Orders table
+            insert_sql = """
+                INSERT INTO SMOOTHIES.PUBLIC.ORDERS (INGREDIENTS)
+                VALUES (?)
+            """
 
-        session.sql(
-            my_insert_stmt,
-            params=[ingredients_string, name_on_order.strip()]
-        ).collect()
+            session.sql(
+                insert_sql,
+                params=[ingredients_string]
+            ).collect()
 
-        st.success("Your order has been placed!", icon="✅")
+            st.success(
+                f"Thank you, {name_on_order.strip()}! "
+                "Your smoothie order has been placed! 🥤"
+            )
+
+        except Exception as e:
+            st.error(f"Unable to place your order: {e}")
