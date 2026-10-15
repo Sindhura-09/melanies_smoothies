@@ -1,4 +1,3 @@
-
 import streamlit as st
 import requests
 
@@ -19,32 +18,6 @@ def get_session():
 # App heading
 st.title("🥤 Customize Your Smoothie! 🥤")
 st.write("Choose the fruits you want in your custom Smoothie!")
-
-
-# New section: SmoothieFroot nutrition information
-st.subheader("🍉 SmoothieFroot Nutrition Information")
-
-try:
-    smoothiefroot_response = requests.get(
-        "https://my.smoothiefroot.com/api/fruit/watermelon",
-        timeout=10
-    )
-
-    smoothiefroot_response.raise_for_status()
-
-    smoothie_data = smoothiefroot_response.json()
-
-    # Display API data as a table, as shown in your screenshot
-    st_df = st.dataframe(
-        data=smoothie_data,
-        use_container_width=True
-    )
-
-except requests.RequestException as e:
-    st.warning(f"Unable to retrieve nutrition information: {e}")
-
-except ValueError:
-    st.warning("The API did not return valid JSON data.")
 
 
 # Customer name
@@ -81,6 +54,44 @@ ingredients_list = st.multiselect(
     max_selections=5,
     placeholder="Choose an option"
 )
+
+
+# Display ingredients and SmoothieFroot nutrition information
+if ingredients_list:
+    ingredients_string = ""
+
+    for fruit_chosen in ingredients_list:
+        ingredients_string += fruit_chosen + " "
+
+        # Get nutrition information from the API
+        try:
+            smoothiefroot_response = requests.get(
+                "https://my.smoothiefroot.com/api/fruit/watermelon",
+                timeout=10
+            )
+
+            smoothiefroot_response.raise_for_status()
+
+            smoothie_data = smoothiefroot_response.json()
+
+            # Display API response as a DataFrame
+            st.subheader(
+                f"🍉 SmoothieFroot Nutrition Information: {fruit_chosen}"
+            )
+
+            st_df = st.dataframe(
+                data=smoothie_data,
+                use_container_width=True
+            )
+
+        except requests.RequestException:
+            st.warning(
+                f"Unable to retrieve nutrition information for "
+                f"{fruit_chosen}."
+            )
+
+        except ValueError:
+            st.warning("The API did not return valid JSON data.")
 
 
 # Submit order
