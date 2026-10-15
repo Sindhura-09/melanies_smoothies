@@ -21,8 +21,8 @@ st.title("🥤 Customize Your Smoothie! 🥤")
 st.write("Choose the fruits you want in your custom Smoothie!")
 
 
-# Watermelon API request
-st.subheader("🍉 Watermelon Information")
+# New section: SmoothieFroot nutrition information
+st.subheader("🍉 SmoothieFroot Nutrition Information")
 
 try:
     smoothiefroot_response = requests.get(
@@ -32,14 +32,19 @@ try:
 
     smoothiefroot_response.raise_for_status()
 
-    # Display the API response as readable JSON
-    try:
-        st.json(smoothiefroot_response.json())
-    except ValueError:
-        st.text(smoothiefroot_response.text)
+    smoothie_data = smoothiefroot_response.json()
+
+    # Display API data as a table, as shown in your screenshot
+    st_df = st.dataframe(
+        data=smoothie_data,
+        use_container_width=True
+    )
 
 except requests.RequestException as e:
-    st.warning(f"Could not load watermelon information: {e}")
+    st.warning(f"Unable to retrieve nutrition information: {e}")
+
+except ValueError:
+    st.warning("The API did not return valid JSON data.")
 
 
 # Customer name
@@ -106,7 +111,10 @@ if st.button("Submit Order", type="primary"):
                 "Your smoothie order has been placed! 🥤"
             )
 
-            st.write("Selected ingredients:", ", ".join(ingredients_list))
+            st.write(
+                "Selected ingredients:",
+                ", ".join(ingredients_list)
+            )
 
         except Exception as e:
             st.error("Unable to place your order.")
