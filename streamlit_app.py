@@ -6,7 +6,7 @@ from snowflake.snowpark.functions import col
 
 
 # Write directly to the app
-st.title(f"Example Streamlit App :balloon: {st.__version__}")
+st.title('MY PARENTS NEW HEALTHY DINNER')
 st.write(
   """Replace this example with your own code!
   **And if you're new to Streamlit,** check
