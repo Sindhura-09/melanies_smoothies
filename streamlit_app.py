@@ -24,7 +24,11 @@ st.write("Choose the fruits you want in your custom Smoothie!")
 
 # Customer name
 name_on_order = st.text_input("Name on Smoothie:")
+
 st.write("The name on your Smoothie will be:", name_on_order)
+
+# Order status
+order_filled = st.checkbox("Mark this order as FILLED", value=False)
 
 
 # Load fruit options from Snowflake
@@ -37,25 +41,19 @@ try:
         .collect()
     )
 
-    # Create a Pandas DataFrame
+    # Create Pandas DataFrame
     pd_df = pd.DataFrame(
         [row.as_dict() for row in fruit_rows]
     )
 
-    # Check that the required columns exist
     if not {"FRUIT_NAME", "SEARCH_ON"}.issubset(pd_df.columns):
         st.error("FRUIT_NAME or SEARCH_ON column is missing.")
         st.stop()
 
-    # Values displayed in the multiselect
     fruit_options = pd_df["FRUIT_NAME"].tolist()
 
 except Exception as e:
-    st.error(
-        "Could not load fruit options. "
-        "Check your Snowflake connection and confirm "
-        "that SEARCH_ON exists in FRUIT_OPTIONS."
-    )
+    st.error("Could not load fruit options from Snowflake.")
     st.exception(e)
     st.stop()
 
@@ -69,70 +67,62 @@ ingredients_list = st.multiselect(
 )
 
 
-# Display ingredients and SmoothieFroot nutrition information
+# Display API nutrition information using SEARCH_ON
 if ingredients_list:
-
-    ingredients_string = " ".join(ingredients_list)
 
     for fruit_chosen in ingredients_list:
 
         # Find the API search value for the selected fruit
-        try:
-            search_on = pd_df.loc[
-                pd_df["FRUIT_NAME"] == fruit_chosen,
-                "SEARCH_ON"
-            ].iloc[0]
+        matching_rows = pd_df.loc[
+            pd_df["FRUIT_NAME"] == fruit_chosen,
+            "SEARCH_ON"
+        ]
 
-            st.write(
-                "The search value for ",
-                fruit_chosen,
-                " is ",
-                search_on,
-                "."
-            )
-
-        except (IndexError, KeyError):
-            st.warning(
-                f"No SEARCH_ON value found for {fruit_chosen}."
-            )
+        if matching_rows.empty:
+            st.warning(f"No SEARCH_ON value found for {fruit_chosen}.")
             continue
 
-        # Check that SEARCH_ON has a value
+        search_on = matching_rows.iloc[0]
+
+        st.write(
+            f"The search value for {fruit_chosen} is {search_on}."
+        )
+
         if pd.isna(search_on) or not str(search_on).strip():
             st.warning(
                 f"SEARCH_ON is empty for {fruit_chosen}. "
-                "Update this value in Snowflake."
+                "Update it in Snowflake."
             )
             continue
 
-        # Get nutrition information from the API
         try:
-            api_fruit = quote(str(search_on).strip().lower(), safe="")
+            api_fruit = quote(
+                str(search_on).strip().lower(),
+                safe=""
+            )
 
             api_url = (
                 "https://my.smoothiefroot.com/api/fruit/"
                 + api_fruit
             )
 
-            smoothiefroot_response = requests.get(
-                api_url,
-                timeout=10
-            )
+            response = requests.get(api_url, timeout=10)
+            response.raise_for_status()
+            smoothie_data = response.json()
 
-            smoothiefroot_response.raise_for_status()
-
-            smoothie_data = smoothiefroot_response.json()
-
-            # Display nutrition information
             st.subheader(
-                f"🍓 SmoothieFroot Nutrition Information: "
-                f"{fruit_chosen}"
+                f"🍓 Nutrition Information: {fruit_chosen}"
             )
 
-            st.dataframe(
-                data=smoothie_data,
-                use_container_width=True
-            )
+            if isinstance(smoothie_data, (dict, list)):
+                st.dataframe(
+                    pd.json_normalize(smoothie_data)
+                    if isinstance(smoothie_data, dict)
+                    else pd.DataFrame(smoothie_data),
+                    use_container_width=True
+                )
+            else:
+                st.write(smoothie_data)
 
         except requests.RequestException as e:
             st.warning(
@@ -142,9 +132,7 @@ if ingredients_list:
             st.caption(str(e))
 
         except ValueError:
-            st.warning(
-                "The API did not return valid JSON data."
-            )
+            st.warning("The API did not return valid JSON data.")
 
 
 # Submit order
@@ -157,17 +145,23 @@ if st.button("Submit Order", type="primary"):
         st.warning("Please choose at least one fruit.")
 
     else:
+        # Preserve the exact order of selected fruits
         ingredients_string = " ".join(ingredients_list)
 
         try:
             insert_sql = """
-                INSERT INTO SMOOTHIES.PUBLIC.ORDERS (INGREDIENTS)
-                VALUES (?)
+                INSERT INTO SMOOTHIES.PUBLIC.ORDERS
+                    (NAME_ON_ORDER, INGREDIENTS, ORDER_FILLED)
+                VALUES (?, ?, ?)
             """
 
             session.sql(
                 insert_sql,
-                params=[ingredients_string]
+                params=[
+                    name_on_order.strip(),
+                    ingredients_string,
+                    order_filled
+                ]
             ).collect()
 
             st.success(
@@ -175,11 +169,15 @@ if st.button("Submit Order", type="primary"):
                 "Your smoothie order has been placed! 🥤"
             )
 
+            st.write("Selected ingredients:", ingredients_string)
             st.write(
-                "Selected ingredients:",
-                ", ".join(ingredients_list)
+                "Order status:",
+                "FILLED" if order_filled else "NOT FILLED"
             )
 
         except Exception as e:
-            st.error("Unable to place your order.")
+            st.error(
+                "Unable to place the order. "
+                "Check the column names in your ORDERS table."
+            )
             st.exception(e)
