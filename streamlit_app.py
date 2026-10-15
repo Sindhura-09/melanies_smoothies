@@ -1,5 +1,8 @@
+
 import streamlit as st
 import requests
+import pandas as pd
+from urllib.parse import quote
 
 # Page configuration
 st.set_page_config(
@@ -19,10 +22,8 @@ def get_session():
 st.title("🥤 Customize Your Smoothie! 🥤")
 st.write("Choose the fruits you want in your custom Smoothie!")
 
-
 # Customer name
 name_on_order = st.text_input("Name on Smoothie:")
-
 st.write("The name on your Smoothie will be:", name_on_order)
 
 
@@ -32,16 +33,28 @@ try:
 
     fruit_rows = (
         session.table("SMOOTHIES.PUBLIC.FRUIT_OPTIONS")
-        .select("FRUIT_NAME")
+        .select("FRUIT_NAME", "SEARCH_ON")
         .collect()
     )
 
-    fruit_options = [row["FRUIT_NAME"] for row in fruit_rows]
+    # Create a Pandas DataFrame
+    pd_df = pd.DataFrame(
+        [row.as_dict() for row in fruit_rows]
+    )
+
+    # Check that the required columns exist
+    if not {"FRUIT_NAME", "SEARCH_ON"}.issubset(pd_df.columns):
+        st.error("FRUIT_NAME or SEARCH_ON column is missing.")
+        st.stop()
+
+    # Values displayed in the multiselect
+    fruit_options = pd_df["FRUIT_NAME"].tolist()
 
 except Exception as e:
     st.error(
         "Could not load fruit options. "
-        "Please check your Snowflake connection and credentials."
+        "Check your Snowflake connection and confirm "
+        "that SEARCH_ON exists in FRUIT_OPTIONS."
     )
     st.exception(e)
     st.stop()
@@ -58,15 +71,51 @@ ingredients_list = st.multiselect(
 
 # Display ingredients and SmoothieFroot nutrition information
 if ingredients_list:
-    ingredients_string = ""
+
+    ingredients_string = " ".join(ingredients_list)
 
     for fruit_chosen in ingredients_list:
-        ingredients_string += fruit_chosen + " "
+
+        # Find the API search value for the selected fruit
+        try:
+            search_on = pd_df.loc[
+                pd_df["FRUIT_NAME"] == fruit_chosen,
+                "SEARCH_ON"
+            ].iloc[0]
+
+            st.write(
+                "The search value for ",
+                fruit_chosen,
+                " is ",
+                search_on,
+                "."
+            )
+
+        except (IndexError, KeyError):
+            st.warning(
+                f"No SEARCH_ON value found for {fruit_chosen}."
+            )
+            continue
+
+        # Check that SEARCH_ON has a value
+        if pd.isna(search_on) or not str(search_on).strip():
+            st.warning(
+                f"SEARCH_ON is empty for {fruit_chosen}. "
+                "Update this value in Snowflake."
+            )
+            continue
 
         # Get nutrition information from the API
         try:
+            api_fruit = quote(str(search_on).strip().lower(), safe="")
+
+            api_url = (
+                "https://my.smoothiefroot.com/api/fruit/"
+                + api_fruit
+            )
+
             smoothiefroot_response = requests.get(
-                "https://my.smoothiefroot.com/api/fruit/watermelon",
+                api_url,
                 timeout=10
             )
 
@@ -74,24 +123,28 @@ if ingredients_list:
 
             smoothie_data = smoothiefroot_response.json()
 
-            # Display API response as a DataFrame
+            # Display nutrition information
             st.subheader(
-                f"🍉 SmoothieFroot Nutrition Information: {fruit_chosen}"
+                f"🍓 SmoothieFroot Nutrition Information: "
+                f"{fruit_chosen}"
             )
 
-            st_df = st.dataframe(
+            st.dataframe(
                 data=smoothie_data,
                 use_container_width=True
             )
 
-        except requests.RequestException:
+        except requests.RequestException as e:
             st.warning(
-                f"Unable to retrieve nutrition information for "
-                f"{fruit_chosen}."
+                f"Unable to retrieve nutrition information "
+                f"for {fruit_chosen}."
             )
+            st.caption(str(e))
 
         except ValueError:
-            st.warning("The API did not return valid JSON data.")
+            st.warning(
+                "The API did not return valid JSON data."
+            )
 
 
 # Submit order
