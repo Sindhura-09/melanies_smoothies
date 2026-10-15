@@ -1,147 +1,223 @@
 
 import streamlit as st
-import requests
 import pandas as pd
+import requests
 from urllib.parse import quote
 
+# --------------------------------------------------
+# PAGE CONFIGURATION
+# --------------------------------------------------
 st.set_page_config(
-    page_title="Customize Your Smoothie",
+    page_title="Melanie's Smoothie Shop",
     page_icon="🥤",
-    layout="centered"
+    layout="wide"
 )
 
-@st.cache_resource
-def get_session():
-    return st.connection("snowflake").session()
+st.title("🥤 Melanie's Smoothie Shop")
+st.subheader("Create your own smoothie!")
+st.write("Select your favourite fruits and place your order.")
 
-
-st.title("🥤 Customize Your Smoothie! 🥤")
-st.write("Choose the fruits you want in your custom Smoothie!")
-
-name_on_order = st.text_input("Name on Smoothie:")
-st.write("The name on your Smoothie will be:", name_on_order)
-
-order_filled = st.checkbox("Mark this order as FILLED", value=False)
-
-# Load fruit names and API search values
+# --------------------------------------------------
+# SNOWFLAKE CONNECTION
+# --------------------------------------------------
 try:
-    session = get_session()
-
-    fruit_rows = (
-        session.table("SMOOTHIES.PUBLIC.FRUIT_OPTIONS")
-        .select("FRUIT_NAME", "SEARCH_ON")
-        .collect()
-    )
-
-    pd_df = pd.DataFrame([row.as_dict() for row in fruit_rows])
-
-    fruit_options = pd_df["FRUIT_NAME"].tolist()
-
+    conn = st.connection("snowflake")
+    session = conn.session()
 except Exception as e:
-    st.error("Unable to load fruit options from Snowflake.")
-    st.exception(e)
+    st.error("Could not connect to Snowflake.")
+    st.code(str(e))
     st.stop()
 
+# --------------------------------------------------
+# LOAD FRUIT OPTIONS
+# --------------------------------------------------
+try:
+    fruit_df = session.sql("""
+        SELECT FRUIT_NAME, SEARCH_ON
+        FROM SMOOTHIES.PUBLIC.FRUIT_OPTIONS
+        ORDER BY FRUIT_NAME
+    """).to_pandas()
 
-# Fruit multiselect
-ingredients_list = st.multiselect(
-    "Choose up to 5 ingredients:",
-    options=fruit_options,
-    max_selections=5,
-    placeholder="Choose an option"
+    # Remove rows that do not contain a fruit name.
+    fruit_df = fruit_df.dropna(subset=["FRUIT_NAME"])
+    fruit_df["FRUIT_NAME"] = fruit_df["FRUIT_NAME"].astype(str)
+
+except Exception as e:
+    st.error("Could not load the fruit options from Snowflake.")
+    st.code(str(e))
+    st.stop()
+
+if fruit_df.empty:
+    st.warning("No fruits are available. Check FRUIT_OPTIONS in Snowflake.")
+    st.stop()
+
+# --------------------------------------------------
+# CUSTOMER ORDER FORM
+# --------------------------------------------------
+st.divider()
+st.header("🍓 Build Your Smoothie")
+
+customer_name = st.text_input(
+    "Enter your name",
+    placeholder="Enter your name here"
 )
 
+fruit_options = fruit_df["FRUIT_NAME"].tolist()
 
-# Look up SEARCH_ON and call the nutrition API
-for fruit_chosen in ingredients_list:
-    matching_rows = pd_df.loc[
-        pd_df["FRUIT_NAME"] == fruit_chosen,
-        "SEARCH_ON"
-    ]
+selected_fruits = st.multiselect(
+    "Choose your fruits",
+    options=fruit_options,
+    help="Choose one or more fruits for your smoothie."
+)
 
-    if matching_rows.empty:
-        st.warning(f"No SEARCH_ON value for {fruit_chosen}.")
-        continue
+# --------------------------------------------------
+# CHECK FRUIT API
+# --------------------------------------------------
+if st.button("🔍 Check Selected Fruits", use_container_width=True):
 
-    search_on = matching_rows.iloc[0]
-
-    if pd.isna(search_on) or not str(search_on).strip():
-        st.warning(f"SEARCH_ON is empty for {fruit_chosen}.")
-        continue
-
-    st.write(f"The search value for {fruit_chosen} is {search_on}.")
-
-    api_fruit = quote(str(search_on).strip().lower(), safe="")
-    api_url = f"https://my.smoothiefroot.com/api/fruit/{api_fruit}"
-
-    try:
-        response = requests.get(api_url, timeout=15)
-        response.raise_for_status()
-        data = response.json()
-
-        st.subheader(f"🍓 Nutrition Information: {fruit_chosen}")
-
-        if isinstance(data, dict):
-            st.dataframe(
-                pd.json_normalize(data),
-                use_container_width=True
-            )
-        elif isinstance(data, list):
-            st.dataframe(
-                pd.DataFrame(data),
-                use_container_width=True
-            )
-        else:
-            st.write(data)
-
-    except requests.RequestException as e:
-        st.warning(f"API request failed for {fruit_chosen}.")
-        st.caption(str(e))
-
-    except ValueError:
-        st.warning("The API did not return valid JSON.")
-
-
-# Submit the order
-if st.button("Submit Order", type="primary"):
-
-    if not name_on_order.strip():
-        st.warning("Please enter your name.")
-
-    elif not ingredients_list:
+    if not selected_fruits:
         st.warning("Please select at least one fruit.")
-
     else:
-        # Keep selected ingredients in their selected order
-        ingredients_string = " ".join(ingredients_list)
+        for fruit in selected_fruits:
+
+            matching_rows = fruit_df[
+                fruit_df["FRUIT_NAME"] == fruit
+            ]
+
+            if matching_rows.empty:
+                st.warning(f"No API mapping found for {fruit}.")
+                continue
+
+            search_value = matching_rows.iloc[0]["SEARCH_ON"]
+
+            if pd.isna(search_value) or not str(search_value).strip():
+                st.warning(f"SEARCH_ON is empty for {fruit}.")
+                continue
+
+            api_fruit = str(search_value).strip().lower()
+            api_url = (
+                "https://my.smoothiefroot.com/api/fruit/"
+                + quote(api_fruit, safe="")
+            )
+
+            try:
+                response = requests.get(api_url, timeout=15)
+
+                if response.status_code == 200:
+                    st.success(f"✅ {fruit} is available in the fruit API.")
+                    try:
+                        st.json(response.json())
+                    except ValueError:
+                        st.write(response.text)
+
+                elif response.status_code == 404:
+                    st.error(
+                        f"{fruit} was not found in the fruit API. "
+                        f"Check its SEARCH_ON value in Snowflake."
+                    )
+                else:
+                    st.warning(
+                        f"API returned status {response.status_code} "
+                        f"for {fruit}."
+                    )
+
+            except requests.RequestException as e:
+                st.error(f"Could not check {fruit}: {e}")
+
+# --------------------------------------------------
+# PLACE ORDER
+# --------------------------------------------------
+st.divider()
+st.header("🛒 Place Your Order")
+
+if st.button("✅ Place Smoothie Order", use_container_width=True):
+
+    if not customer_name.strip():
+        st.warning("Please enter your name.")
+    elif not selected_fruits:
+        st.warning("Please select at least one fruit.")
+    else:
+        ingredients = ", ".join(selected_fruits)
 
         try:
-            insert_sql = """
-                INSERT INTO SMOOTHIES.PUBLIC.ORDERS
-                    (NAME_ON_ORDER, INGREDIENTS, ORDER_FILLED)
-                VALUES (?, ?, ?)
-            """
-
-            session.sql(
-                insert_sql,
-                params=[
-                    name_on_order.strip(),
-                    ingredients_string,
-                    order_filled
+            # Use Snowpark DataFrame insertion to safely handle
+            # names and ingredient text.
+            order_data = session.create_dataframe(
+                [(customer_name.strip(), ingredients, False)],
+                schema=[
+                    "NAME_ON_ORDER",
+                    "INGREDIENTS",
+                    "ORDER_FILLED"
                 ]
-            ).collect()
+            )
+
+            order_data.write.save_as_table(
+                "SMOOTHIES.PUBLIC.ORDERS",
+                mode="append",
+                column_order="name"
+            )
 
             st.success(
-                f"Thank you, {name_on_order.strip()}! "
-                "Your smoothie order has been placed! 🥤"
+                f"🎉 Order placed successfully for {customer_name.strip()}!"
             )
-
-            st.write("Ingredients:", ingredients_string)
-            st.write(
-                "Status:",
-                "FILLED" if order_filled else "NOT FILLED"
-            )
+            st.write("**Selected fruits:**", ingredients)
+            st.info("Your order has been marked as not yet filled.")
 
         except Exception as e:
-            st.error("Unable to place the order.")
-            st.exception(e)
+            st.error("Unable to save your order to Snowflake.")
+            st.code(str(e))
+
+# --------------------------------------------------
+# DISPLAY ORDER HISTORY
+# --------------------------------------------------
+st.divider()
+st.header("📋 Order History")
+
+try:
+    orders_df = session.sql("""
+        SELECT
+            NAME_ON_ORDER,
+            INGREDIENTS,
+            ORDER_FILLED
+        FROM SMOOTHIES.PUBLIC.ORDERS
+    """).to_pandas()
+
+    if not orders_df.empty:
+        # Display a readable status column.
+        orders_df["STATUS"] = orders_df["ORDER_FILLED"].apply(
+            lambda value: "✅ Filled" if value is True else "⏳ Pending"
+        )
+
+        st.dataframe(
+            orders_df,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.caption(f"Total orders: {len(orders_df)}")
+
+        filled_count = (
+            orders_df["ORDER_FILLED"].fillna(False).astype(bool).sum()
+        )
+        pending_count = len(orders_df) - filled_count
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.metric("✅ Filled Orders", int(filled_count))
+
+        with col2:
+            st.metric("⏳ Pending Orders", int(pending_count))
+
+    else:
+        st.info("No orders have been placed yet.")
+
+except Exception as e:
+    st.error("Could not load the order history.")
+    st.code(str(e))
+
+# --------------------------------------------------
+# FOOTER
+# --------------------------------------------------
+st.divider()
+st.caption("Melanie's Smoothie Shop | Powered by Streamlit and Snowflake")
